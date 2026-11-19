@@ -54,8 +54,6 @@ jobs:
     timeout-minutes: 8
     permissions:
       contents: write
-    env:
-      STATE_DIR: ${{ runner.temp }}/munich-state
     steps:
       - name: Check notification configuration
         env:
@@ -74,7 +72,11 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npx --no-install playwright install --with-deps chromium --only-shell
-      - run: bash scripts/prepare-state.sh
+      - name: Prepare state branch
+        run: |
+          export STATE_DIR="$RUNNER_TEMP/munich-state"
+          echo "STATE_DIR=$STATE_DIR" >> "$GITHUB_ENV"
+          bash scripts/prepare-state.sh
       - env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
