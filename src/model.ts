@@ -5,10 +5,10 @@ export type Slot = { date: string; time: string };
 export type Result =
   | { status: "AVAILABLE"; slots: Slot[] }
   | { status: "UNAVAILABLE" }
-  | { status: "UNKNOWN" | "ERROR"; reason: string; retryAt?: number };
+  | { failure: "UNVERIFIED" | "ERROR"; reason: string; retryAt?: number };
 export class Problem extends Error {
   constructor(
-    readonly status: "UNKNOWN" | "ERROR",
+    readonly kind: "UNVERIFIED" | "ERROR",
     reason: string,
     readonly retryable = false,
     readonly retryAt?: number,
@@ -26,14 +26,14 @@ export function httpStatus(status: number, retryAfter?: string) {
       : Date.parse(retryAfter);
     if (Number.isSafeInteger(until) && until > Date.now())
       throw new Problem(
-        status === 429 ? "UNKNOWN" : "ERROR",
+        status === 429 ? "UNVERIFIED" : "ERROR",
         "HTTP " + status + " с Retry-After",
         false,
         until,
       );
   }
   if ([401, 403, 429].includes(status))
-    throw new Problem("UNKNOWN", "HTTP " + status);
+    throw new Problem("UNVERIFIED", "HTTP " + status);
   if (status !== 200)
     throw new Problem("ERROR", "HTTP " + status, status >= 500);
 }
@@ -43,11 +43,11 @@ export function choices(
   kind: "days" | "timeSlots",
 ): Choice[] {
   if (!object(payload) || !Array.isArray(payload[kind]))
-    throw new Problem("UNKNOWN", "Неизвестный формат " + kind);
+    throw new Problem("UNVERIFIED", "Неизвестный формат " + kind);
   const options = new Map<string, string>();
   for (const row of payload[kind]) {
     if (!object(row) || typeof row.isAllowed !== "boolean")
-      throw new Problem("UNKNOWN", "Изменился формат isAllowed");
+      throw new Problem("UNVERIFIED", "Изменился формат isAllowed");
     if (!row.isAllowed) continue;
     const [value, label] =
       kind === "days" ? [row.datePart, row.date] : [row.startTime, row.slot];
@@ -58,7 +58,7 @@ export function choices(
       !label.trim() ||
       options.has(value)
     )
-      throw new Problem("UNKNOWN", "Неоднозначные варианты в " + kind);
+      throw new Problem("UNVERIFIED", "Неоднозначные варианты в " + kind);
     options.set(value, label.trim());
   }
   return Array.from(options, ([value, label]) => ({ value, label }));
@@ -76,12 +76,12 @@ export function dateKey(value: string) {
     !Number.isFinite(parsed) ||
     new Date(parsed).toISOString().slice(0, 10) !== date
   )
-    throw new Problem("UNKNOWN", "Неизвестная дата");
+    throw new Problem("UNVERIFIED", "Неизвестная дата");
   return date;
 }
 export function timeKey(value: string) {
   if (!/^(?:[01]\d|2[0-3]):[0-5]\d(?::00)?$/.test(value))
-    throw new Problem("UNKNOWN", "Неизвестное время");
+    throw new Problem("UNVERIFIED", "Неизвестное время");
   return value.slice(0, 5);
 }
 export function summarize(slots: Slot[]): Result {

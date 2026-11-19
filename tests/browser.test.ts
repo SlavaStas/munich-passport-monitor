@@ -14,7 +14,12 @@ beforeAll(async () => {
 afterAll(async () => {
   await browser?.close();
 });
-async function fixture(replies: unknown[], http = 200, fail = false) {
+async function fixture(
+  replies: unknown[],
+  http = 200,
+  fail = false,
+  mismatchedService = false,
+) {
   const page = await browser.newPage();
   const html = await readFile(
     new URL("./fixtures/form.html", import.meta.url),
@@ -27,10 +32,15 @@ async function fixture(replies: unknown[], http = 200, fail = false) {
       if (fail) return route.abort("connectionfailed");
       return route.fulfill({
         contentType: "text/html; charset=utf-8",
-        body: html,
+        body: mismatchedService
+          ? html.replace("ServiceId:service.value", "ServiceId:'other'")
+          : html,
       });
     }
-    requests.push(route.request().postData() ?? "");
+    requests.push(
+      new URLSearchParams(route.request().postData() ?? "").get("Date") ??
+        "missing",
+    );
     return route.fulfill({ status: http, json: replies.shift() ?? {} });
   });
   try {
@@ -64,10 +74,12 @@ it("проверяет отображённое время каждой выбр
       { date: "2026-11-26", time: "14:15" },
     ],
   });
-  expect(requests).toEqual(["date=", "date=2026-11-25", "date=2026-11-26"]);
+  expect(requests).toEqual(["", "2026-11-25", "2026-11-26"]);
 });
 it("подтверждает пустой список и сообщение формы", async () =>
-  expect((await fixture([{ days: [] }])).result.status).toBe("UNAVAILABLE"));
+  expect((await fixture([{ days: [] }])).result).toMatchObject({
+    status: "UNAVAILABLE",
+  }));
 it("потеря формата на второй дате оставляет весь результат неизвестным", async () => {
   const days = ["2026-11-25", "2026-11-26"].map((date) => ({
     datePart: date,
@@ -81,13 +93,17 @@ it("потеря формата на второй дате оставляет в
         { timeSlots: [{ isAllowed: true, startTime: "08:15", slot: "08:15" }] },
         {},
       ])
-    ).result.status,
-  ).toBe("UNKNOWN");
+    ).result,
+  ).toMatchObject({ failure: "UNVERIFIED" });
 });
 it("отличает 429 от отсутствия мест", async () =>
-  expect((await fixture([{}], 429)).result.status).toBe("UNKNOWN"));
+  expect((await fixture([{}], 429)).result).toMatchObject({
+    failure: "UNVERIFIED",
+  }));
 it("отличает сбой загрузки от отсутствия мест", async () =>
-  expect((await fixture([], 200, true)).result.status).toBe("ERROR"));
+  expect((await fixture([], 200, true)).result).toMatchObject({
+    failure: "ERROR",
+  }));
 
 it("различает блокировку страницы и отказ при запросе дат", async () => {
   const page = await browser.newPage();
@@ -102,15 +118,21 @@ it("различает блокировку страницы и отказ пр�
     );
     const result = await check(() => observePage(page));
     expect(result).toMatchObject({
-      status: "UNKNOWN",
+      failure: "UNVERIFIED",
       reason: "HTTP 403 (GET page, HTML, Cloudflare Challenge)",
     });
     const { result: denied } = await fixture([{}], 403);
     expect(denied).toMatchObject({
-      status: "UNKNOWN",
+      failure: "UNVERIFIED",
       reason: "HTTP 403 (POST days, JSON)",
     });
   } finally {
     await page.close();
   }
+});
+
+it("не принимает пустой список другой услуги даже с видимым сообщением о занятых местах", async () => {
+  const { result } = await fixture([{ days: [] }], 200, false, true);
+  expect(result).toMatchObject({ failure: "UNVERIFIED" });
+  expect(result).not.toHaveProperty("status");
 });

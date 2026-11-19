@@ -3,7 +3,7 @@ import {
   errors,
   type Locator,
   type Page,
-  type Response,
+  type Response as BrowserResponse,
 } from "playwright";
 import { setTimeout as delay } from "node:timers/promises";
 import {
@@ -35,7 +35,7 @@ async function hasChallenge(page: Page) {
   );
 }
 async function checkResponse(
-  response: Response,
+  response: BrowserResponse,
   stage: "page" | "days" | "timeSlots",
 ) {
   const headers = response.headers();
@@ -56,10 +56,12 @@ async function checkResponse(
         : "other";
   const evidence = [method + " " + stage, format];
   if (challenged) evidence.push("Cloudflare Challenge");
-  else if (status === 403 && (format === "HTML" || format === "JSON")) {
+  else if (status === 403) {
     // Classify known text without writing the response body or request data to the log.
     const body = (await response.text().catch(() => "")).slice(0, 65536);
-    if (
+    const code = /^\s*error code:\s*(1\d{3})\s*$/i.exec(body);
+    if (code) evidence.push("код ответа " + code[1]);
+    else if (
       /sorry, you have been blocked/i.test(body) &&
       /cloudflare ray id/i.test(body)
     )
@@ -71,7 +73,7 @@ async function checkResponse(
   if (ray && /^[0-9a-f]{16}(?:-[a-z]{3})?$/i.test(ray))
     evidence.push("CF-Ray " + ray);
   throw new Problem(
-    "UNKNOWN",
+    "UNVERIFIED",
     "HTTP " + status + " (" + evidence.join(", ") + ")",
   );
 }
@@ -80,6 +82,7 @@ async function selectAndRead(
   select: Locator,
   option: { value: string } | { label: string },
   kind: "days" | "timeSlots",
+  serviceId: string,
 ) {
   // Listen before changing the selection. Only accept a response to this queue form.
   const [response] = await Promise.all([
@@ -93,13 +96,30 @@ async function selectAndRead(
     select.selectOption(option),
   ]);
   await checkResponse(response, kind);
+  // Match the site's own request to the selected service and, for times, the selected day.
+  const request = response.request();
+  const form = await new Response(request.postData(), {
+    headers: { "content-type": request.headers()["content-type"] ?? "" },
+  })
+    .formData()
+    .catch(() => null);
+  if (
+    !form ||
+    form.get("ServiceId") !== serviceId ||
+    form.get("form") !== (kind === "days" ? "days" : "times") ||
+    ("value" in option && form.get("Date") !== option.value)
+  )
+    throw new Problem(
+      "UNVERIFIED",
+      "Запрос не подтверждает выбранную услугу или дату",
+    );
   if (!response.headers()["content-type"]?.includes("json"))
-    throw new Problem("UNKNOWN", "Форма вернула ответ вне формата JSON");
+    throw new Problem("UNVERIFIED", "Форма вернула ответ вне формата JSON");
   let body: unknown;
   try {
     body = await response.json();
   } catch {
-    throw new Problem("UNKNOWN", "Ответ JSON пуст или повреждён");
+    throw new Problem("UNVERIFIED", "Ответ JSON пуст или повреждён");
   }
   return choices(body, kind);
 }
@@ -152,14 +172,24 @@ export async function observePage(page: Page): Promise<Result> {
     if (!doc) throw new Problem("ERROR", "Нет ответа страницы", true);
     await checkResponse(doc, "page");
     if (page.url() !== URL_QUEUE || (await hasChallenge(page)))
-      throw new Problem("UNKNOWN", "Перенаправление или проверка доступа");
+      throw new Problem("UNVERIFIED", "Перенаправление или проверка доступа");
     await page
       .getByRole("heading", { name: /Електронна черга.*Мюнхен/ })
       .waitFor();
     const service = page.locator("#services #service");
     await service.waitFor({ state: "visible" });
     // A server-rendered select can appear before the JavaScript form is initialized.
-    const days = await selectAndRead(page, service, { label: SERVICE }, "days");
+    const target = service.getByRole("option", { name: SERVICE, exact: true });
+    const serviceId = await target.getAttribute("value");
+    if (!serviceId)
+      throw new Problem("UNVERIFIED", "Нет идентификатора услуги");
+    const days = await selectAndRead(
+      page,
+      service,
+      { label: SERVICE },
+      "days",
+      serviceId,
+    );
     await verifyRendered(page, "date", days);
     const slots: Slot[] = [];
     for (const day of days) {
@@ -169,6 +199,7 @@ export async function observePage(page: Page): Promise<Result> {
         page.locator("#services #date"),
         { value: day.value },
         "timeSlots",
+        serviceId,
       );
       await verifyRendered(page, "time", times);
       for (const time of times) slots.push({ date, time: timeKey(time.value) });
@@ -177,12 +208,12 @@ export async function observePage(page: Page): Promise<Result> {
   } catch (err) {
     if (err instanceof Problem) throw err;
     if (await hasChallenge(page).catch(() => false))
-      throw new Problem("UNKNOWN", "Страница запросила проверку доступа");
+      throw new Problem("UNVERIFIED", "Страница запросила проверку доступа");
     if (networkFailure)
       throw new Problem("ERROR", "Сбой сетевого запроса к очереди", true);
     if (err instanceof errors.TimeoutError)
       throw new Problem(
-        "UNKNOWN",
+        "UNVERIFIED",
         "Форма или ответ очереди не подтверждены до таймаута",
       );
     throw new Problem("ERROR", "Сбой загрузки или браузера", true);
@@ -226,7 +257,7 @@ export async function check(
         continue;
       }
       return {
-        status: problem.status,
+        failure: problem.kind,
         reason: problem.message,
         retryAt: problem.retryAt,
       };

@@ -10,7 +10,7 @@
   // Synthetic UI for the documented tests. All traffic is intercepted locally.
   const service = document.querySelector('#service'), date = document.querySelector('#date'), time = document.querySelector('#time');
   async function update(target, field, value, label) {
-    const response = await fetch(location.href, {method:'POST',body:new URLSearchParams({date:date.value})});
+    const response = await fetch(location.href, {method:'POST',body:new URLSearchParams({form:field==='days'?'days':'times',ServiceId:service.value,Date:date.value})});
     if (!response.ok) return;
     const payload = await response.json();
     if (!Array.isArray(payload[field])) return;

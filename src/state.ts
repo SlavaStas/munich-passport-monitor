@@ -9,6 +9,7 @@ export type State = {
   failures: number;
   lastDiagnostic: number;
   retryAt?: number;
+  lastConfirmed?: { status: "AVAILABLE" | "UNAVAILABLE"; at: number };
 };
 export const initial = (): State => ({
   version: 1,
@@ -26,6 +27,14 @@ export async function loadState(dir: string): Promise<State> {
       (typeof s.retryAt !== "number" ||
         !Number.isSafeInteger(s.retryAt) ||
         s.retryAt < 0)) ||
+    (s.lastConfirmed !== undefined &&
+      (!object(s.lastConfirmed) ||
+        !["AVAILABLE", "UNAVAILABLE"].includes(
+          String(s.lastConfirmed.status),
+        ) ||
+        typeof s.lastConfirmed.at !== "number" ||
+        !Number.isSafeInteger(s.lastConfirmed.at) ||
+        s.lastConfirmed.at <= 0)) ||
     s.version !== 1 ||
     !Array.isArray(s.notified) ||
     !s.notified.every(
@@ -42,6 +51,7 @@ export async function loadState(dir: string): Promise<State> {
   return {
     version: 1,
     notified: s.notified,
+    lastConfirmed: s.lastConfirmed as State["lastConfirmed"],
     failures: s.failures,
     lastDiagnostic: s.lastDiagnostic,
     retryAt: s.retryAt as number | undefined,
@@ -78,7 +88,7 @@ export async function processResult(
   now = Date.now(),
 ) {
   const s: State = { ...old, notified: [...old.notified] };
-  if (r.status === "UNKNOWN" || r.status === "ERROR") {
+  if ("failure" in r) {
     s.failures++;
     s.retryAt = r.retryAt;
     await save(s);
@@ -90,7 +100,12 @@ export async function processResult(
         "Мониторинг Мюнхена: " +
           s.failures +
           " проверок подряд без результата. " +
-          r.status +
+          (old.lastConfirmed
+            ? "Последняя подтверждённая проверка " +
+              checkedAt(old.lastConfirmed.at) +
+              " (Вена), " +
+              old.lastConfirmed.status
+            : "Подтверждённых проверок пока нет") +
           " — " +
           r.reason +
           "\n" +
@@ -103,6 +118,7 @@ export async function processResult(
   }
   const present = new Set(r.status === "AVAILABLE" ? r.slots.map(slotKey) : []);
   s.notified = s.notified.filter((k) => present.has(k));
+  s.lastConfirmed = { status: r.status, at: now };
   s.failures = 0;
   s.lastDiagnostic = 0;
   delete s.retryAt;

@@ -70,7 +70,7 @@ describe("данные формы", () => {
         httpStatus(code);
         return summarize([]);
       });
-      expect((await check(run, ok)).status).toBe("UNKNOWN");
+      expect(await check(run, ok)).toMatchObject({ failure: "UNVERIFIED" });
       expect(run).toHaveBeenCalledTimes(1);
     }
   });
@@ -80,7 +80,7 @@ describe("данные формы", () => {
       return summarize([]);
     });
     const backoff = vi.fn(ok);
-    expect((await check(run, backoff)).status).toBe("ERROR");
+    expect(await check(run, backoff)).toMatchObject({ failure: "ERROR" });
     expect(run).toHaveBeenCalledTimes(2);
     expect(backoff).toHaveBeenCalledOnce();
   });
@@ -95,12 +95,15 @@ describe("уведомления", () => {
     const visit = () => processResult(summarize([slot]), state, send, save);
     await visit();
     await visit();
+    const beforeFailure = state.lastConfirmed;
     await processResult(
-      { status: "UNKNOWN", reason: "CAPTCHA" },
+      { failure: "UNVERIFIED", reason: "CAPTCHA" },
       state,
       send,
       save,
     );
+    expect(state.lastConfirmed).toEqual(beforeFailure);
+    expect(beforeFailure?.status).toBe("AVAILABLE");
     await visit();
     expect(send).toHaveBeenCalledTimes(1);
     expect(send.mock.calls.flat().join(" ")).toContain("25.11.2026 — 10:30");
@@ -120,7 +123,9 @@ describe("уведомления", () => {
         save,
       ),
     ).rejects.toThrow();
-    expect(save).not.toHaveBeenCalled();
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({ notified: [] }),
+    );
   });
   it("ограничивает диагностические сообщения и сохраняет слоты", async () => {
     let state = { ...initial(), notified: ["2026-11-25 10:30"] };
@@ -129,7 +134,13 @@ describe("уведомления", () => {
       state = structuredClone(s);
     };
     const fail = (now: number) =>
-      processResult({ status: "ERROR", reason: "503" }, state, send, save, now);
+      processResult(
+        { failure: "ERROR", reason: "503" },
+        state,
+        send,
+        save,
+        now,
+      );
     for (let i = 1; i <= 6; i++) await fail(10000 + i);
     expect(send).toHaveBeenCalledOnce();
     expect(state.notified).toHaveLength(1);
