@@ -1,4 +1,10 @@
-import { chromium, errors, type Locator, type Page } from "playwright";
+import {
+  chromium,
+  errors,
+  type Locator,
+  type Page,
+  type Response,
+} from "playwright";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   choices,
@@ -28,6 +34,47 @@ async function hasChallenge(page: Page) {
       .isVisible())
   );
 }
+async function checkResponse(
+  response: Response,
+  stage: "page" | "days" | "timeSlots",
+) {
+  const headers = response.headers();
+  const status = response.status();
+  const challenged = headers["cf-mitigated"] === "challenge";
+  if (status !== 403 && !(status === 200 && challenged)) {
+    httpStatus(status, headers["retry-after"]);
+    return;
+  }
+
+  const method = stage === "page" ? "GET" : "POST";
+  const media = headers["content-type"]?.split(";")[0]?.trim();
+  const format =
+    media === "text/html"
+      ? "HTML"
+      : media === "application/json"
+        ? "JSON"
+        : "other";
+  const evidence = [method + " " + stage, format];
+  if (challenged) evidence.push("Cloudflare Challenge");
+  else if (status === 403 && (format === "HTML" || format === "JSON")) {
+    // Classify known text without writing the response body or request data to the log.
+    const body = (await response.text().catch(() => "")).slice(0, 65536);
+    if (
+      /sorry, you have been blocked/i.test(body) &&
+      /cloudflare ray id/i.test(body)
+    )
+      evidence.push("Cloudflare block page");
+    else if (/invalid csrf token|csrf token mismatch/i.test(body))
+      evidence.push("response reports CSRF token error");
+  }
+  const ray = headers["cf-ray"];
+  if (ray && /^[0-9a-f]{16}(?:-[a-z]{3})?$/i.test(ray))
+    evidence.push("CF-Ray " + ray);
+  throw new Problem(
+    "UNKNOWN",
+    "HTTP " + status + " (" + evidence.join(", ") + ")",
+  );
+}
 async function selectAndRead(
   page: Page,
   select: Locator,
@@ -45,7 +92,7 @@ async function selectAndRead(
     ),
     select.selectOption(option),
   ]);
-  httpStatus(response.status(), response.headers()["retry-after"]);
+  await checkResponse(response, kind);
   if (!response.headers()["content-type"]?.includes("json"))
     throw new Problem("UNKNOWN", "Форма вернула ответ вне формата JSON");
   let body: unknown;
@@ -103,7 +150,7 @@ export async function observePage(page: Page): Promise<Result> {
       timeout: 30_000,
     });
     if (!doc) throw new Problem("ERROR", "Нет ответа страницы", true);
-    httpStatus(doc.status(), doc.headers()["retry-after"]);
+    await checkResponse(doc, "page");
     if (page.url() !== URL_QUEUE || (await hasChallenge(page)))
       throw new Problem("UNKNOWN", "Перенаправление или проверка доступа");
     await page

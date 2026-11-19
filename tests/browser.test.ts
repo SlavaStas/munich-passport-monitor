@@ -88,3 +88,29 @@ it("отличает 429 от отсутствия мест", async () =>
   expect((await fixture([{}], 429)).result.status).toBe("UNKNOWN"));
 it("отличает сбой загрузки от отсутствия мест", async () =>
   expect((await fixture([], 200, true)).result.status).toBe("ERROR"));
+
+it("различает блокировку страницы и отказ при запросе дат", async () => {
+  const page = await browser.newPage();
+  try {
+    await page.route("**/*", (route) =>
+      route.fulfill({
+        status: 403,
+        contentType: "text/html",
+        headers: { "cf-mitigated": "challenge" },
+        body: "private response detail",
+      }),
+    );
+    const result = await check(() => observePage(page));
+    expect(result).toMatchObject({
+      status: "UNKNOWN",
+      reason: "HTTP 403 (GET page, HTML, Cloudflare Challenge)",
+    });
+    const { result: denied } = await fixture([{}], 403);
+    expect(denied).toMatchObject({
+      status: "UNKNOWN",
+      reason: "HTTP 403 (POST days, JSON)",
+    });
+  } finally {
+    await page.close();
+  }
+});
