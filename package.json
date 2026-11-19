@@ -1,0 +1,29 @@
+{
+  "name": "munich-passport-monitor",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "check": "node dist/index.js --dry-run",
+    "start": "node dist/index.js",
+    "test": "vitest run tests/monitor.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.check.json",
+    "lint": "eslint src tests",
+    "build": "tsc -p tsconfig.json",
+    "test:browser": "vitest run tests/browser.test.ts"
+  },
+  "dependencies": {
+    "playwright": "1.65.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.5",
+    "@types/node": "26.6.6",
+    "eslint": "9.39.5",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.73.0",
+    "vitest": "4.1.12"
+  }
+}

@@ -1,0 +1,24 @@
+<!doctype html>
+<meta charset="utf-8">
+<h1>Електронна черга — Мюнхен</h1>
+<form id="services">
+  <select id="service"><option value="">-</option><option value="passport">Закордонний паспорт та (або) ID-картка</option></select>
+  <select id="date" hidden></select><select id="time" hidden></select>
+  <div role="alert" hidden>Вибачте, на даний момент всі місця зайняті!</div>
+</form>
+<script>
+  // Synthetic UI for the documented tests. All traffic is intercepted locally.
+  const service = document.querySelector('#service'), date = document.querySelector('#date'), time = document.querySelector('#time');
+  async function update(target, field, value, label) {
+    const response = await fetch(location.href, {method:'POST',body:new URLSearchParams({date:date.value})});
+    if (!response.ok) return;
+    const payload = await response.json();
+    if (!Array.isArray(payload[field])) return;
+    const rows=payload[field].filter(row=>row.isAllowed);
+    const options=rows.map(row=>new Option(row[label],row[value]));
+    target.replaceChildren(new Option('-',''), ...options);
+    target.hidden=!rows.length; document.querySelector('[role=alert]').hidden=!!rows.length;
+  }
+  service.onchange=()=>update(date,'days','datePart','date');
+  date.onchange=()=>update(time,'timeSlots','startTime','slot');
+</script>
